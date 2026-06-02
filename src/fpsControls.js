@@ -32,7 +32,7 @@ export function setupFpsControls(camera, canvas, domElement) {
     'font:600 18px/1.4 system-ui,sans-serif', 'letter-spacing:0.04em',
     'cursor:pointer', 'z-index:10', 'user-select:none', 'text-align:center',
   ].join(';');
-  overlay.innerHTML = 'Cliquer pour explorer<br><span style="font-size:13px;opacity:0.7">ZQSD / WASD pour se déplacer · Shift pour courir · Échap pour sortir</span>';
+  overlay.innerHTML = 'Cliquer pour explorer<br><span style="font-size:13px;opacity:0.7">ZQSD / WASD pour se déplacer · Shift pour courir · M pour le plan · Échap pour sortir</span>';
   document.body.appendChild(overlay);
 
   overlay.addEventListener('click', () => controls.lock());

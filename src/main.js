@@ -4,6 +4,7 @@ import { setupDebug } from './debug.js';
 import { buildRoom, ROOM } from './room.js';
 import { setupBaseLighting, addFluorescents, updateFluorescents } from './lights.js';
 import { loadCeilingLamp } from './assets.js';
+import { setupMinimap } from './minimap.js';
 
 // --- Renderer ---------------------------------------------------------------
 const canvas = document.createElement('canvas');
@@ -45,6 +46,10 @@ const troffers = addFluorescents(scene);
 // --- Prop Sketchfab (étape 7) ----------------------------------------------
 loadCeilingLamp(scene);
 
+// --- Plan 2D (touche M) -----------------------------------------------------
+// Vue de dessus de la salle avec position/orientation du joueur.
+const minimap = setupMinimap(camera, ROOM, troffers);
+
 // --- Boucle de rendu --------------------------------------------------------
 const clock = new THREE.Clock();
 
@@ -65,6 +70,7 @@ function animate() {
   const t = clock.elapsedTime;
   updateControls(dt);
   updateFluorescents(troffers, t);
+  minimap.update();
   renderer.render(scene, camera);
 }
 animate();
