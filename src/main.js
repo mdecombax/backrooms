@@ -1,130 +1,130 @@
 import * as THREE from 'three';
 import { setupFpsControls } from './fpsControls.js';
 import { setupDebug } from './debug.js';
-import { buildRoom, disposeRoom, applyRoomDims, ROOM } from './room.js';
+import { buildLevel, disposeLevel, applyLevel, LEVEL } from './room.js';
 import { setupBaseLighting, addFluorescents, updateFluorescents, disposeFluorescents } from './lights.js';
-import { loadCeilingLamp, repositionCeilingLamp } from './assets.js';
 import { setupMinimap } from './minimap.js';
-import { generateRoom } from './procgen.js';
+import { generateLevel } from './procgen.js';
 import { setupRoomHud } from './roomHud.js';
+import { setupAmbiance } from './sound.js';
 
 // --- Renderer ---------------------------------------------------------------
 const canvas = document.createElement('canvas');
 document.getElementById('app').appendChild(canvas);
 
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-// pixelRatio plafonné à 1.5 : sur Retina (dpr=2) on rendrait 4x les pixels pour un
-// gain visuel nul sur une scène floue → on coupe ~44% du fill-rate, donc de la conso.
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.0));
 renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.0;
+renderer.toneMappingExposure = 1.18;
 
-// --- Scene & camera ---------------------------------------------------------
+// --- Scène & caméra ---------------------------------------------------------
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x161208); // accordé à la couleur du brouillard
+scene.background = new THREE.Color(0x161208);
 
-const camera = new THREE.PerspectiveCamera(
-  60,
-  window.innerWidth / window.innerHeight,
-  0.1,
-  100
-);
-camera.position.set(0, 1.6, 2.5); // hauteur d'oeil, à l'intérieur de la pièce
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
 
-// Contrôles FPS : clic pour verrouiller le pointeur, ZQSD/WASD pour marcher.
 const { controls, update: updateControls } = setupFpsControls(camera, canvas);
 
-// --- Génération procédurale des dimensions ----------------------------------
-// On tire une pièce différente à chaque chargement (surface + ratio bornés).
-let roomInfo = generateRoom();
-applyRoomDims(roomInfo);
+// --- Son d'ambiance ---------------------------------------------------------
+const ambiance = setupAmbiance();
+controls.addEventListener('lock', () => ambiance.start());
 
-// --- Pièce ------------------------------------------------------------------
-// room et troffers sont mutables : la régénération les détruit puis les recrée.
-let room = buildRoom(scene);
+// --- Génération procédurale du niveau ---------------------------------------
+let levelInfo = generateLevel();
+applyLevel(levelInfo);
 
-// --- Éclairage de base (étape 3) -------------------------------------------
+// --- Construction initiale --------------------------------------------------
+let built = buildLevel(scene);
+
+// --- Éclairage de base ------------------------------------------------------
 const baseLights = setupBaseLighting(scene);
 
-// --- Néons fluorescents (étape 4) ------------------------------------------
+// --- Néons fluorescents -----------------------------------------------------
 let troffers = addFluorescents(scene);
 
-// --- Prop Sketchfab (étape 7) ----------------------------------------------
-// Plafonnier centré au plafond. Chargé une fois ; repositionné à chaque
-// régénération car la hauteur de pièce varie désormais selon l'archétype.
-let ceilingLamp = null;
-loadCeilingLamp(scene).then((m) => { ceilingLamp = m; });
 
 // --- Plan 2D (touche M) -----------------------------------------------------
-// Vue de dessus de la salle avec position/orientation du joueur.
-const minimap = setupMinimap(camera, ROOM, troffers);
-minimap.refresh(troffers, roomInfo.type);
+const minimap = setupMinimap(camera, troffers);
 
-// Adapte la portée du brouillard à la taille de la pièce : une salle immense doit
-// se révéler comme telle (sinon le voile à 22 m masque le fond et tout se ressemble).
+// --- Brouillard accordé au niveau -------------------------------------------
 function tuneFog() {
   if (!scene.fog) return;
-  const reach = Math.hypot(ROOM.width, ROOM.depth); // diagonale
-  scene.fog.near = Math.max(3, reach * 0.18);
-  scene.fog.far = Math.max(14, reach * 1.15);
+  const b = LEVEL.bounds;
+  const reach = Math.hypot(b.maxX - b.minX, b.maxZ - b.minZ);
+  scene.fog.near = Math.max(3, reach * 0.1);
+  scene.fog.far = Math.max(18, reach * 1.2);
 }
+
+// --- Spawn du joueur --------------------------------------------------------
+function placePlayer() {
+  camera.position.set(LEVEL.spawn.x, 1.6, LEVEL.spawn.z);
+}
+placePlayer();
 tuneFog();
+minimap.refresh(troffers, `${levelInfo.roomCount} pièce${levelInfo.roomCount > 1 ? 's' : ''}`);
 
 // --- Régénération (bouton + touche R) ---------------------------------------
-function regenerate(forceType) {
-  // 1) Destruction de la pièce et des néons courants (libère la mémoire GPU).
-  disposeRoom(scene, room);
+function regenerate() {
+  disposeLevel(scene, built);
   disposeFluorescents(scene, troffers);
 
-  // 2) Nouveau tirage de dimensions + application sur la référence ROOM partagée.
-  //    forceType (optionnel) permet d'imposer un archétype depuis window.debug.
-  roomInfo = generateRoom(undefined, typeof forceType === 'string' ? forceType : undefined);
-  applyRoomDims(roomInfo);
+  levelInfo = generateLevel();
+  applyLevel(levelInfo);
 
-  // 3) Reconstruction.
-  room = buildRoom(scene);
+  built = buildLevel(scene);
   troffers = addFluorescents(scene);
-  repositionCeilingLamp(ceilingLamp); // recolle la lampe au nouveau plafond
 
-  // 4) Replace le joueur au centre de la nouvelle pièce (jamais coincé dans un mur).
-  camera.position.set(0, 1.6, 0);
-
-  // 5) Brouillard accordé à la nouvelle taille, plan 2D et HUD rafraîchis.
+  placePlayer();
   tuneFog();
-  minimap.refresh(troffers, roomInfo.type);
-  hud.update(roomInfo);
+  minimap.refresh(troffers, `${levelInfo.roomCount} pièce${levelInfo.roomCount > 1 ? 's' : ''}`);
+  hud.update(levelInfo);
 }
 
-const hud = setupRoomHud(roomInfo, regenerate);
+const hud = setupRoomHud(levelInfo, regenerate);
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'KeyR') { e.preventDefault(); regenerate(); }
 });
 
+// --- Compteur FPS -----------------------------------------------------------
+const fpsEl = document.createElement('div');
+fpsEl.style.cssText = [
+  'position:fixed', 'top:16px', 'left:16px', 'z-index:30',
+  'font:700 13px/1 monospace', 'color:#e6d27a',
+  'background:rgba(10,9,4,0.75)', 'border:1px solid rgba(230,210,122,0.3)',
+  'border-radius:6px', 'padding:6px 10px', 'user-select:none',
+  'pointer-events:none', 'white-space:pre',
+].join(';');
+document.body.appendChild(fpsEl);
+
 // --- Boucle de rendu --------------------------------------------------------
 const clock = new THREE.Clock();
-
-// Cap FPS : une scène liminale quasi-statique n'a aucun besoin de 90-120 fps.
-// On vise 30 fps → le GPU travaille ~3x moins (ventilo/batterie), scintillement
-// néon toujours fluide. Réglable à chaud via window.debug.setFpsCap(n).
-let fpsCap = 30;
-let nextFrame = 0;
+let fpsFrames = 0;
+let fpsLastTime = performance.now();
 
 function animate() {
   requestAnimationFrame(animate);
   const now = performance.now();
-  if (now < nextFrame) return; // on saute la frame tant que le budget n'est pas écoulé
-  nextFrame = now + 1000 / fpsCap;
-
-  // getDelta() met à jour elapsedTime ; on lit ensuite t pour ne consommer le delta qu'une fois.
   const dt = clock.getDelta();
   const t = clock.elapsedTime;
   updateControls(dt);
   updateFluorescents(troffers, t);
   minimap.update();
   renderer.render(scene, camera);
+
+  fpsFrames++;
+  const elapsed = now - fpsLastTime;
+  if (elapsed >= 500) {
+    const fps = Math.round(fpsFrames * 1000 / elapsed);
+    const mem = performance.memory
+      ? `\n${(performance.memory.usedJSHeapSize / 1048576).toFixed(1)} MB`
+      : '';
+    fpsEl.textContent = `${fps} FPS${mem}`;
+    fpsFrames = 0;
+    fpsLastTime = now;
+  }
 }
 animate();
 
@@ -137,10 +137,9 @@ window.addEventListener('resize', () => {
 
 // --- Debug ------------------------------------------------------------------
 setupDebug({
-  THREE, scene, camera, renderer, controls, ROOM,
-  get room() { return room; },
+  THREE, scene, camera, renderer, controls, LEVEL,
+  get built() { return built; },
   get troffers() { return troffers; },
-  roomInfo: () => roomInfo,
+  levelInfo: () => levelInfo,
   regenerate,
-  setFpsCap: (n) => { fpsCap = Math.max(1, n | 0); return fpsCap; },
 });

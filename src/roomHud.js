@@ -1,13 +1,11 @@
-// HUD léger : bouton « régénérer la salle » + dimensions de la pièce courante.
-// Style backrooms (fond sombre, traits jaune moutarde). Hors flux pointer-lock :
-// le bouton reste cliquable même quand la souris n'est pas verrouillée.
+// HUD léger : bouton « régénérer » + informations du niveau courant.
+// Affiche le nombre de pièces, la liste des archétypes, la seed et les dimensions.
 
 /**
- * @param {{width:number, depth:number, area:number, ratio:number, seed:number}} info dims initiales
- * @param {() => void} onRegenerate callback déclenché par le bouton / la touche R
- * @returns {{update:(info)=>void, dispose:()=>void}}
+ * @param {object} levelInfo infos initiales retournées par generateLevel()
+ * @param {() => void} onRegenerate callback déclenché par le bouton / touche R
  */
-export function setupRoomHud(info, onRegenerate) {
+export function setupRoomHud(levelInfo, onRegenerate) {
   const panel = document.createElement('div');
   panel.style.cssText = [
     'position:fixed', 'top:16px', 'right:16px',
@@ -17,11 +15,11 @@ export function setupRoomHud(info, onRegenerate) {
     'border-radius:8px', 'padding:12px 14px',
     'box-shadow:0 6px 24px rgba(0,0,0,0.5)',
     'display:flex', 'flex-direction:column', 'gap:10px',
-    'min-width:170px',
+    'min-width:190px',
   ].join(';');
 
   const dims = document.createElement('div');
-  dims.style.cssText = 'font-weight:400;opacity:0.85;line-height:1.5';
+  dims.style.cssText = 'font-weight:400;opacity:0.85;line-height:1.6';
 
   const btn = document.createElement('button');
   btn.textContent = '⟳ Régénérer (R)';
@@ -32,24 +30,36 @@ export function setupRoomHud(info, onRegenerate) {
   ].join(';');
   btn.addEventListener('mouseenter', () => { btn.style.background = '#f2e08c'; });
   btn.addEventListener('mouseleave', () => { btn.style.background = '#e6d27a'; });
-  // Empêche le clic de verrouiller le pointeur (le canvas est juste derrière).
   btn.addEventListener('click', (e) => { e.stopPropagation(); onRegenerate(); });
 
   panel.appendChild(dims);
   panel.appendChild(btn);
   document.body.appendChild(panel);
 
-  function update(i) {
-    const type = i.type || 'Salle';
-    const desc = i.desc ? `<span style="opacity:0.7;font-style:italic">${i.desc}</span><br>` : '';
+  function update(info) {
+    // Ligne « NIVEAU — N pièces ».
+    const nbLabel = info.roomCount === 1 ? '1 pièce' : `${info.roomCount} pièces`;
+    const corrLabel = info.corridorCount > 0
+      ? ` + ${info.corridorCount} couloir${info.corridorCount > 1 ? 's' : ''}`
+      : '';
+
+    // Liste des types de pièces.
+    const roomLines = (info.rooms || [])
+      .map((r, i) => {
+        const b = info.bounds;
+        const area = (r.width * r.depth).toFixed(0);
+        return `<span style="opacity:0.8">${i + 1}. ${r.type} — ${r.width.toFixed(1)}×${r.depth.toFixed(1)} m (${area} m²)</span>`;
+      })
+      .join('<br>');
+
     dims.innerHTML =
-      `<b style="font-weight:700;color:#f2e08c;font-size:15px">${type.toUpperCase()}</b><br>` +
-      desc +
-      `${i.width.toFixed(1)} × ${i.depth.toFixed(1)} m · H ${i.height.toFixed(1)} m` +
-      `<br>${i.area} m² · ratio ${i.ratio}` +
-      `<br><span style="opacity:0.55">seed ${i.seed}</span>`;
+      `<b style="font-weight:700;color:#f2e08c;font-size:15px">NIVEAU</b><br>` +
+      `<span style="color:#f2e08c">${nbLabel}${corrLabel}</span><br>` +
+      `H ${info.height?.toFixed(1) ?? '?'} m<br>` +
+      roomLines +
+      `<br><span style="opacity:0.45;font-size:11px">seed ${info.seed}</span>`;
   }
-  update(info);
+  update(levelInfo);
 
   return {
     update,
