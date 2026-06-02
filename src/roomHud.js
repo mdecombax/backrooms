@@ -40,9 +40,12 @@ export function setupRoomHud(info, onRegenerate) {
   document.body.appendChild(panel);
 
   function update(i) {
+    const type = i.type || 'Salle';
+    const desc = i.desc ? `<span style="opacity:0.7;font-style:italic">${i.desc}</span><br>` : '';
     dims.innerHTML =
-      `<b style="font-weight:700">SALLE PROCÉDURALE</b><br>` +
-      `${i.width.toFixed(1)} × ${i.depth.toFixed(1)} m` +
+      `<b style="font-weight:700;color:#f2e08c;font-size:15px">${type.toUpperCase()}</b><br>` +
+      desc +
+      `${i.width.toFixed(1)} × ${i.depth.toFixed(1)} m · H ${i.height.toFixed(1)} m` +
       `<br>${i.area} m² · ratio ${i.ratio}` +
       `<br><span style="opacity:0.55">seed ${i.seed}</span>`;
   }

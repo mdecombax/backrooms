@@ -12,12 +12,14 @@ import * as THREE from 'three';
  * Retourne { update, toggle, isVisible } — appeler update() dans la boucle quand visible.
  */
 export function setupMinimap(camera, ROOM, troffers = []) {
-  const SCALE = 46;       // pixels par mètre
   const PAD = 28;         // marge autour de la pièce (px)
+  const MAX_PX = 70;      // px/m max (petites salles : on ne dézoome pas à l'excès)
   const dpr = Math.min(window.devicePixelRatio, 2);
 
   // Dimensions recalculées à partir de ROOM (mutable → resize après régénération).
-  let W, H, cx, cz;
+  // SCALE devient dynamique : le plan s'adapte pour tenir à l'écran même pour un
+  // couloir de 30 m ou une salle immense (sinon il déborderait largement).
+  let W, H, cx, cz, SCALE;
 
   // --- Canvas overlay -------------------------------------------------------
   const canvas = document.createElement('canvas');
@@ -36,6 +38,12 @@ export function setupMinimap(camera, ROOM, troffers = []) {
 
   // Recalcule la taille du plan d'après les dimensions courantes de la pièce.
   function resize() {
+    // On vise un plan qui tient dans ~78 % de la fenêtre, quelle que soit la
+    // taille de la pièce : SCALE = min(MAX_PX, contrainte largeur, contrainte hauteur).
+    const availW = window.innerWidth * 0.78 - PAD * 2;
+    const availH = window.innerHeight * 0.78 - PAD * 2;
+    SCALE = Math.max(8, Math.min(MAX_PX, availW / ROOM.width, availH / ROOM.depth));
+
     W = ROOM.width * SCALE + PAD * 2;
     H = ROOM.depth * SCALE + PAD * 2;
     cx = W / 2;
@@ -52,6 +60,7 @@ export function setupMinimap(camera, ROOM, troffers = []) {
   const toPx = (x, z) => [cx + x * SCALE, cz + z * SCALE];
 
   let visible = false;
+  let roomLabel = '';        // type de salle courant (mis à jour via refresh)
   const dir = new THREE.Vector3();
 
   function draw() {
@@ -105,7 +114,8 @@ export function setupMinimap(camera, ROOM, troffers = []) {
     // Légende
     ctx.fillStyle = '#e6d27a';
     ctx.font = '600 12px system-ui, sans-serif';
-    ctx.fillText('PLAN — vue de dessus', PAD, 18);
+    const title = roomLabel ? `PLAN — ${roomLabel.toUpperCase()}` : 'PLAN — vue de dessus';
+    ctx.fillText(title, PAD, 18);
     ctx.font = '11px system-ui, sans-serif';
     ctx.fillStyle = 'rgba(230,210,122,0.7)';
     ctx.fillText(
@@ -134,8 +144,13 @@ export function setupMinimap(camera, ROOM, troffers = []) {
     update,
     toggle,
     resize,
-    // Re-cible les néons à dessiner et redimensionne le plan après une régénération.
-    refresh(newTroffers) { if (newTroffers) troffers = newTroffers; resize(); if (visible) draw(); },
+    // Re-cible les néons + libellé de type et redimensionne le plan après régénération.
+    refresh(newTroffers, label) {
+      if (newTroffers) troffers = newTroffers;
+      if (label != null) roomLabel = label;
+      resize();
+      if (visible) draw();
+    },
     get isVisible() { return visible; },
     dispose() { document.removeEventListener('keydown', onKey); canvas.remove(); },
   };

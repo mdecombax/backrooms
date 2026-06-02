@@ -37,7 +37,9 @@ export async function loadCeilingLamp(scene) {
     box2.getCenter(center);
     model.position.x += -center.x;
     model.position.z += -center.z;
-    // colle le haut du modèle au plafond
+    // Mémorise la hauteur du sommet du modèle (repère local) pour pouvoir le
+    // recoller au plafond quand la hauteur de pièce change (régénération).
+    model.userData.topY = box2.max.y;
     model.position.y += ROOM.height - box2.max.y;
 
     model.name = 'ceiling_lamp_sketchfab';
@@ -47,4 +49,11 @@ export async function loadCeilingLamp(scene) {
     console.error('[assets] Échec du chargement du plafonnier:', err);
     return null;
   }
+}
+
+/** Recolle le plafonnier au plafond courant (après changement de ROOM.height). */
+export function repositionCeilingLamp(model) {
+  if (!model) return;
+  const topY = model.userData?.topY ?? 0;
+  model.position.y = ROOM.height - topY;
 }

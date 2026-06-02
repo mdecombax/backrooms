@@ -1,26 +1,22 @@
-// Génération procédurale des dimensions d'une pièce.
+// Génération procédurale d'une pièce — système d'ARCHÉTYPES.
 //
-// « Système intelligent » : on ne tire pas width/depth indépendamment (ça
-// produirait des couloirs de 1 m ou des hangars de 1 km²). On contraint
-// d'abord la SURFACE puis le RATIO d'allongement, ce qui garantit des pièces
-// toujours plausibles :
-//   - surface bornée   → ni minuscule ni gigantesque
-//   - ratio borné      → ni couloir extrême ni carré pur systématique
-//   - dimensions bornées + arrondies au demi-mètre → valeurs « propres »
+// Ancien système : on tirait surface + ratio dans des bornes serrées → toutes les
+// pièces se ressemblaient (rectangles moyens proches du carré). Trop homogène.
+//
+// Nouveau système : on tire d'abord un TYPE de pièce (couloir, cagibi, grande
+// salle, salle immense, galerie…), chacun avec ses propres plages de petit côté,
+// d'allongement et de hauteur. Conséquences :
+//   - des salles franchement différentes (couloirs très longs, halls immenses…)
+//   - chaque pièce est IDENTIFIABLE : on sait dire « c'est un couloir »
+//   - les proportions restent plausibles car bornées par archétype
+//
+// Pour ajouter un type : ajouter une entrée dans ARCHETYPES (voir le format).
 
-// Bornes de l'espace de tirage (mètres / mètres²).
-const DIM_MIN = 4;     // aucun côté plus court que 4 m
-const DIM_MAX = 15;    // aucun côté plus long que 15 m
-const AREA_MIN = 28;   // ~5.3 m de côté minimum
-const AREA_MAX = 130;  // ~11.4 m de côté maximum
-const RATIO_MAX = 2.2; // allongement max (long / court)
-const HEIGHT = 3;      // hauteur fixe pour l'instant
-
+const HALF = (v) => Math.round(v * 2) / 2;     // arrondi au 0,5 m
+const ONE = (v) => Math.round(v);              // arrondi au mètre (grands côtés)
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
-const lerp = (a, b, t) => a + (b - a) * t;
-const halfStep = (v) => Math.round(v * 2) / 2; // arrondi au 0,5 m
 
-// PRNG déterministe (mulberry32) pour pouvoir rejouer une graine au besoin.
+// PRNG déterministe (mulberry32) → on peut rejouer une graine au besoin.
 function mulberry32(a) {
   return function () {
     a |= 0;
@@ -31,39 +27,106 @@ function mulberry32(a) {
   };
 }
 
+// Catalogue des archétypes.
+//   short  : [min,max] longueur du PETIT côté (m)
+//   ratio  : [min,max] allongement (grand côté / petit côté) — 1 = carré
+//   height : [min,max] hauteur sous plafond (m)
+//   weight : poids relatif de tirage (probabilité ∝ weight)
+//   round  : 'half' (0,5 m) ou 'one' (1 m) — granularité des dimensions finales
+//   label  : libellé court affiché à l'écran
+//   desc   : phrase d'ambiance décrivant le type
+const ARCHETYPES = [
+  {
+    id: 'closet', label: 'Cagibi', weight: 1.2,
+    short: [2, 3], ratio: [1, 1.4], height: [2.3, 2.7], round: 'half',
+    desc: 'Réduit exigu, plafond bas, sans issue apparente.',
+  },
+  {
+    id: 'corridor', label: 'Couloir', weight: 2.4,
+    short: [1.8, 3], ratio: [4.5, 9], height: [2.5, 3.1], round: 'one',
+    desc: 'Long couloir étroit qui semble ne jamais finir.',
+  },
+  {
+    id: 'gallery', label: 'Galerie', weight: 1.4,
+    short: [5, 8], ratio: [2.2, 3.4], height: [3.2, 4], round: 'one',
+    desc: 'Espace allongé et large, comme une galerie marchande.',
+  },
+  {
+    id: 'small', label: 'Petite salle', weight: 1.8,
+    short: [4, 6], ratio: [1, 1.4], height: [2.7, 3], round: 'half',
+    desc: 'Pièce modeste, presque carrée.',
+  },
+  {
+    id: 'medium', label: 'Salle moyenne', weight: 2.2,
+    short: [6, 9], ratio: [1.1, 1.8], height: [2.9, 3.4], round: 'half',
+    desc: 'Salle de bureau ordinaire, ni grande ni petite.',
+  },
+  {
+    id: 'hall', label: 'Grande salle', weight: 1.6,
+    short: [11, 16], ratio: [1, 1.6], height: [3.6, 4.6], round: 'one',
+    desc: 'Vaste salle ouverte, plafond haut.',
+  },
+  {
+    id: 'vast', label: 'Salle immense', weight: 1,
+    short: [17, 24], ratio: [1, 1.5], height: [4.2, 6], round: 'one',
+    desc: 'Étendue immense où les murs se perdent dans le brouillard.',
+  },
+];
+
+const TOTAL_WEIGHT = ARCHETYPES.reduce((s, a) => s + a.weight, 0);
+
+/** Choisit un archétype au hasard, pondéré par `weight`. */
+function pickArchetype(rng) {
+  let r = rng() * TOTAL_WEIGHT;
+  for (const a of ARCHETYPES) {
+    r -= a.weight;
+    if (r <= 0) return a;
+  }
+  return ARCHETYPES[ARCHETYPES.length - 1];
+}
+
+const lerpIn = (rng, [lo, hi]) => lo + (hi - lo) * rng();
+
 /**
- * Tire les dimensions d'une pièce.
- * @param {number} [seed] graine entière pour un tirage reproductible ; sinon aléatoire.
- * @returns {{width:number, depth:number, height:number, area:number, ratio:number, seed:number}}
+ * Tire une pièce complète (dimensions + type identifié).
+ * @param {number} [seed]      graine entière pour un tirage reproductible.
+ * @param {string} [forceType] id d'archétype à forcer (debug) — sinon pondéré.
+ * @returns {{width:number, depth:number, height:number, area:number, ratio:number,
+ *            seed:number, typeId:string, type:string, desc:string}}
  */
-export function generateRoom(seed) {
+export function generateRoom(seed, forceType) {
   const usedSeed = seed == null ? (Math.random() * 0xffffffff) >>> 0 : seed >>> 0;
   const rng = mulberry32(usedSeed);
 
-  // Surface biaisée vers le bas (rng² ) : on préfère des pièces de taille modeste,
-  // les grandes restent possibles mais rares — plus cohérent avec des bureaux.
-  const r = rng();
-  const area = lerp(AREA_MIN, AREA_MAX, r * r);
-  const ratio = lerp(1, RATIO_MAX, rng());
+  const arch = forceType
+    ? ARCHETYPES.find((a) => a.id === forceType) || pickArchetype(rng)
+    : pickArchetype(rng);
 
-  // Surface = court × long, long = court × ratio  →  court = sqrt(area / ratio)
-  let short = Math.sqrt(area / ratio);
-  let long = short * ratio;
+  const roundFn = arch.round === 'one' ? ONE : HALF;
 
-  short = halfStep(clamp(short, DIM_MIN, DIM_MAX));
-  long = halfStep(clamp(long, DIM_MIN, DIM_MAX));
+  const short = clamp(lerpIn(rng, arch.short), 1.5, 26);
+  const ratio = lerpIn(rng, arch.ratio);
+  let shortSide = Math.max(1.5, roundFn(short));
+  let longSide = Math.max(shortSide, roundFn(short * ratio));
+  const height = HALF(lerpIn(rng, arch.height));
 
-  // On répartit aléatoirement le grand côté sur X ou Z.
+  // Le grand côté tombe aléatoirement sur X ou Z (oriente la pièce).
   const longOnX = rng() < 0.5;
-  const width = longOnX ? long : short;
-  const depth = longOnX ? short : long;
+  const width = longOnX ? longSide : shortSide;
+  const depth = longOnX ? shortSide : longSide;
 
   return {
     width,
     depth,
-    height: HEIGHT,
+    height,
     area: +(width * depth).toFixed(1),
-    ratio: +(long / short).toFixed(2),
+    ratio: +(longSide / shortSide).toFixed(2),
     seed: usedSeed,
+    typeId: arch.id,
+    type: arch.label,
+    desc: arch.desc,
   };
 }
+
+/** Liste des types disponibles (pour debug / forçage depuis la console). */
+export const ROOM_TYPES = ARCHETYPES.map((a) => a.id);
