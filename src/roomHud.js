@@ -48,7 +48,8 @@ export function setupRoomHud(levelInfo, onRegenerate) {
       .map((r, i) => {
         const b = info.bounds;
         const area = (r.width * r.depth).toFixed(0);
-        return `<span style="opacity:0.8">${i + 1}. ${r.type} — ${r.width.toFixed(1)}×${r.depth.toFixed(1)} m (${area} m²)</span>`;
+        const rh = (r.height ?? 0).toFixed(1);
+        return `<span style="opacity:0.8">${i + 1}. ${r.type} — ${r.width.toFixed(1)}×${r.depth.toFixed(1)} m, H ${rh} m</span>`;
       })
       .join('<br>');
 

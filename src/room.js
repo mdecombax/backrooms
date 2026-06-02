@@ -18,6 +18,7 @@ export const LEVEL = {
   openings: [],
   rooms: [],
   pillars: [],
+  lintels: [],
   height: 3,
   roomCount: 1,
   corridorCount: 0,
@@ -33,6 +34,7 @@ export function applyLevel(info) {
   LEVEL.openings = info.openings;
   LEVEL.rooms = info.rooms;
   LEVEL.pillars = info.pillars ?? [];
+  LEVEL.lintels = info.lintels ?? [];
   LEVEL.height = info.height;
   LEVEL.roomCount = info.roomCount;
   LEVEL.corridorCount = info.corridorCount;
@@ -93,9 +95,9 @@ export function buildLevel(scene) {
   group.name = 'level';
 
   const mats = buildSurfaceMaterials();
-  const h = LEVEL.height;
 
   for (const c of LEVEL.cells) {
+    const h = c.height ?? LEVEL.height;
     const xL = c.cx - c.width / 2, xR = c.cx + c.width / 2;
     const zT = c.cz - c.depth / 2, zB = c.cz + c.depth / 2;
     const interior = new THREE.Vector3(c.cx, h / 2, c.cz);
@@ -115,6 +117,7 @@ export function buildLevel(scene) {
   }
 
   for (const w of LEVEL.walls) {
+    const h = LEVEL.height;
     const dx = w.x2 - w.x1, dz = w.z2 - w.z1;
     const len = Math.hypot(dx, dz);
     if (len < 0.01) continue;
@@ -135,8 +138,9 @@ export function buildLevel(scene) {
     group.add(quad(p(x2m,0,z2m), p(x2p,0,z2p), p(x2p,h,z2p), p(x2m,h,z2m), mats.wall, WALL_T/WALL_TILE, h/WALL_TILE, null));
   }
 
-  // Colonnes portantes (section carrée, sol → plafond).
+  // Colonnes portantes (section carrée, sol → plafond du niveau).
   for (const pl of LEVEL.pillars) {
+    const h = LEVEL.height;
     const hs = pl.size / 2;
     const p = (x, y, z) => new THREE.Vector3(x, y, z);
     const uv = pl.size / WALL_TILE;
@@ -148,6 +152,34 @@ export function buildLevel(scene) {
     group.add(quad(p(pl.cx-hs,0,pl.cz-hs), p(pl.cx-hs,0,pl.cz+hs), p(pl.cx-hs,h,pl.cz+hs), p(pl.cx-hs,h,pl.cz-hs), mats.wall, uv, h/WALL_TILE, null));
     // Face E (x maximal)
     group.add(quad(p(pl.cx+hs,0,pl.cz-hs), p(pl.cx+hs,0,pl.cz+hs), p(pl.cx+hs,h,pl.cz+hs), p(pl.cx+hs,h,pl.cz-hs), mats.wall, uv, h/WALL_TILE, null));
+  }
+
+  // Linteaux — bandes de mur verticales dans les ouvertures entre pièces de hauteurs différentes.
+  // Chaque linteau couvre y=[hLow, hHigh] à l'emplacement de l'ouverture, fermant le vide
+  // visible depuis la pièce plus haute.
+  for (const l of LEVEL.lintels) {
+    const hLow = l.height;
+    const hHigh = LEVEL.height;
+    if (hHigh - hLow < 0.05) continue;
+    const hT = WALL_T / 2;
+    const p = (x, y, z) => new THREE.Vector3(x, y, z);
+    const bandH = hHigh - hLow;
+
+    if (l.axis === 'x') {
+      const span = l.b - l.a;
+      // Deux grandes faces verticales
+      group.add(quad(p(l.line-hT,hLow,l.a), p(l.line-hT,hLow,l.b), p(l.line-hT,hHigh,l.b), p(l.line-hT,hHigh,l.a), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
+      group.add(quad(p(l.line+hT,hLow,l.a), p(l.line+hT,hLow,l.b), p(l.line+hT,hHigh,l.b), p(l.line+hT,hHigh,l.a), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
+      // Face inférieure (ferme le bord visible depuis le bas)
+      group.add(quad(p(l.line-hT,hLow,l.a), p(l.line+hT,hLow,l.a), p(l.line+hT,hLow,l.b), p(l.line-hT,hLow,l.b), mats.ceiling, WALL_T/CEIL_TILE, span/CEIL_TILE, null));
+    } else {
+      const span = l.b - l.a;
+      // Deux grandes faces verticales
+      group.add(quad(p(l.a,hLow,l.line-hT), p(l.b,hLow,l.line-hT), p(l.b,hHigh,l.line-hT), p(l.a,hHigh,l.line-hT), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
+      group.add(quad(p(l.a,hLow,l.line+hT), p(l.b,hLow,l.line+hT), p(l.b,hHigh,l.line+hT), p(l.a,hHigh,l.line+hT), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
+      // Face inférieure
+      group.add(quad(p(l.a,hLow,l.line-hT), p(l.b,hLow,l.line-hT), p(l.b,hLow,l.line+hT), p(l.a,hLow,l.line+hT), mats.ceiling, span/CEIL_TILE, WALL_T/CEIL_TILE, null));
+    }
   }
 
   scene.add(group);

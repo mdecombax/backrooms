@@ -37,6 +37,7 @@ function pbrMaterial(id, { color = 0xffffff, roughness = 1, normalScale = 1 } = 
 export function buildSurfaceMaterials() {
   const floor = pbrMaterial('Carpet016', { color: 0xb4a468, roughness: 0.9, normalScale: 1.0 });
   const ceiling = pbrMaterial('OfficeCeiling001', { color: 0xf5f2e8, roughness: 1.0, normalScale: 0.6 });
+  ceiling.side = THREE.DoubleSide; // visible depuis les pièces voisines plus hautes
   const wall = pbrMaterial('PaintedPlaster017', { color: 0xe6d27a, roughness: 0.96, normalScale: 0.6 });
   wall.side = THREE.DoubleSide; // murs intérieurs vus des deux côtés
   return { floor, ceiling, wall };

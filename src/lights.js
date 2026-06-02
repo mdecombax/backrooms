@@ -64,10 +64,10 @@ export function addFluorescents(scene) {
   const lightDist = Math.max(LEVEL.height * 3.5, 10);
   const frameMat = new THREE.MeshStandardMaterial({ color: 0xdedacb, roughness: 0.7 });
   const panelMat = () => new THREE.MeshBasicMaterial({ color: FLUO_COLOR, fog: false });
-  const cy = LEVEL.height - 0.02;
   const troffers = [];
 
   for (const c of LEVEL.cells) {
+    const cy = (c.height ?? LEVEL.height) - 0.02;
     const cols = Math.max(1, Math.min(Math.round(c.width / TARGET_SPACING), Math.floor(c.width / 1.8)));
     const rows = Math.max(1, Math.min(Math.round(c.depth / TARGET_SPACING), Math.floor(c.depth / 1.8)));
 

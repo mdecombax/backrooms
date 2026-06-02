@@ -91,7 +91,8 @@ function drawFootprintForced(rng, archetypeId) {
   const ratio = lerpIn(rng, arch.ratio);
   const shortSide = Math.max(1.5, roundFn(short));
   const longSide = Math.max(shortSide, roundFn(short * ratio));
-  return { shortSide, longSide, type: arch.label, typeId: arch.id, desc: arch.desc };
+  const height = HALF(lerpIn(rng, arch.height));
+  return { shortSide, longSide, height, type: arch.label, typeId: arch.id, desc: arch.desc };
 }
 
 // --- Géométrie de placement -------------------------------------------------
@@ -148,8 +149,8 @@ function tryAttach(base, side, mode, f, cells, idx, rng) {
   const newCenterV = lineV + sign * (gap + rv / 2);
 
   const room = horiz
-    ? { id: 'R' + idx, kind: 'room', cx: newCenterV, cz: cc, width: rv, depth: ru, type: f.type, typeId: f.typeId, desc: f.desc }
-    : { id: 'R' + idx, kind: 'room', cx: cc, cz: newCenterV, width: ru, depth: rv, type: f.type, typeId: f.typeId, desc: f.desc };
+    ? { id: 'R' + idx, kind: 'room', cx: newCenterV, cz: cc, width: rv, depth: ru, height: f.height, type: f.type, typeId: f.typeId, desc: f.desc }
+    : { id: 'R' + idx, kind: 'room', cx: cc, cz: newCenterV, width: ru, depth: rv, height: f.height, type: f.type, typeId: f.typeId, desc: f.desc };
 
   if (collidesAny(rectOf(room), cells, [base.id])) return null;
 
@@ -162,13 +163,13 @@ function tryAttach(base, side, mode, f, cells, idx, rng) {
     const cCenterV = (lineV + roomLineV) / 2;
     const cLen = Math.abs(roomLineV - lineV);
     corridor = horiz
-      ? { id: 'R' + idx + '_C', kind: 'room', cx: cCenterV, cz: cc, width: cLen, depth: mouthW, type: corridorFp.type, typeId: corridorFp.typeId, desc: corridorFp.desc }
-      : { id: 'R' + idx + '_C', kind: 'room', cx: cc, cz: cCenterV, width: mouthW, depth: cLen, type: corridorFp.type, typeId: corridorFp.typeId, desc: corridorFp.desc };
+      ? { id: 'R' + idx + '_C', kind: 'room', cx: cCenterV, cz: cc, width: cLen, depth: mouthW, height: corridorFp.height, type: corridorFp.type, typeId: corridorFp.typeId, desc: corridorFp.desc }
+      : { id: 'R' + idx + '_C', kind: 'room', cx: cc, cz: cCenterV, width: mouthW, depth: cLen, height: corridorFp.height, type: corridorFp.type, typeId: corridorFp.typeId, desc: corridorFp.desc };
     if (collidesAny(rectOf(corridor), cells, [base.id, room.id])) return null;
-    openings.push(makeOpening(horiz, lineV, a0, a1));      // bouche côté base
-    openings.push(makeOpening(horiz, roomLineV, a0, a1));  // bouche côté nouvelle pièce
+    openings.push({ ...makeOpening(horiz, lineV, a0, a1), h1: base.height ?? 3, h2: corridorFp.height ?? 3 });
+    openings.push({ ...makeOpening(horiz, roomLineV, a0, a1), h1: corridorFp.height ?? 3, h2: f.height ?? 3 });
   } else {
-    openings.push(makeOpening(horiz, lineV, a0, a1));      // porte dans le mur partagé
+    openings.push({ ...makeOpening(horiz, lineV, a0, a1), h1: base.height ?? 3, h2: f.height ?? 3 });
   }
 
   return { room, corridor, openings };
@@ -218,8 +219,8 @@ function subtractIntervals(segs, holes, eps = 1e-4) {
  */
 function buildWalls(cells, openings) {
   const key = (v) => Math.round(v * 100) / 100;
-  const vx = new Map(), hz = new Map();           // bords groupés par ligne
-  const vHoles = new Map(), hHoles = new Map();   // ouvertures groupées par ligne
+  const vx = new Map(), hz = new Map();
+  const vHoles = new Map(), hHoles = new Map();
 
   for (const c of cells) {
     const r = rectOf(c);
@@ -297,6 +298,7 @@ function generatePillars(room, rng) {
         cx: ox + (ix + 0.5) * stepX,
         cz: oz + (iz + 0.5) * stepZ,
         size,
+        height: room.height ?? 3,
       });
     }
   }
@@ -317,8 +319,7 @@ export function generateLevel(seed) {
 
   // Pièce de départ centrée à l'origine (le joueur y apparaît).
   const f0 = drawFootprint(rng);
-  const levelHeight = f0.height;
-  const r0 = { id: 'R0', kind: 'room', cx: 0, cz: 0, width: f0.width, depth: f0.depth, type: f0.type, typeId: f0.typeId, desc: f0.desc };
+  const r0 = { id: 'R0', kind: 'room', cx: 0, cz: 0, width: f0.width, depth: f0.depth, height: f0.height, type: f0.type, typeId: f0.typeId, desc: f0.desc };
 
   const cells = [r0];
   const rooms = [r0];
@@ -354,6 +355,13 @@ export function generateLevel(seed) {
   const pillars = [];
   for (const room of rooms) pillars.push(...generatePillars(room, rng));
 
+  // Linteaux aux ouvertures entre pièces de hauteurs différentes.
+  const lintels = openings
+    .filter(o => o.h1 != null && o.h2 != null && Math.abs(o.h1 - o.h2) > 0.05)
+    .map(o => ({ axis: o.axis, line: o.line, a: o.a, b: o.b, height: Math.min(o.h1, o.h2) }));
+
+  const levelHeight = cells.reduce((max, c) => Math.max(max, c.height ?? 3), 0);
+
   return {
     seed: usedSeed,
     height: levelHeight,
@@ -364,6 +372,7 @@ export function generateLevel(seed) {
     roomCount,
     corridorCount,
     pillars,
+    lintels,
     bounds: computeBounds(cells),
     spawn: { x: 0, z: 0 },
   };
