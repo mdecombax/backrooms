@@ -14,18 +14,16 @@ import * as THREE from 'three';
 export function setupMinimap(camera, ROOM, troffers = []) {
   const SCALE = 46;       // pixels par mètre
   const PAD = 28;         // marge autour de la pièce (px)
-  const W = ROOM.width * SCALE + PAD * 2;
-  const H = ROOM.depth * SCALE + PAD * 2;
+  const dpr = Math.min(window.devicePixelRatio, 2);
+
+  // Dimensions recalculées à partir de ROOM (mutable → resize après régénération).
+  let W, H, cx, cz;
 
   // --- Canvas overlay -------------------------------------------------------
   const canvas = document.createElement('canvas');
-  const dpr = Math.min(window.devicePixelRatio, 2);
-  canvas.width = W * dpr;
-  canvas.height = H * dpr;
   canvas.style.cssText = [
     'position:fixed', 'top:50%', 'left:50%',
     'transform:translate(-50%,-50%)',
-    `width:${W}px`, `height:${H}px`,
     'background:rgba(10,9,4,0.92)',
     'border:1px solid #e6d27a',
     'border-radius:6px',
@@ -35,11 +33,22 @@ export function setupMinimap(camera, ROOM, troffers = []) {
   document.body.appendChild(canvas);
 
   const ctx = canvas.getContext('2d');
-  ctx.scale(dpr, dpr);
+
+  // Recalcule la taille du plan d'après les dimensions courantes de la pièce.
+  function resize() {
+    W = ROOM.width * SCALE + PAD * 2;
+    H = ROOM.depth * SCALE + PAD * 2;
+    cx = W / 2;
+    cz = H / 2;
+    canvas.width = W * dpr;
+    canvas.height = H * dpr;
+    canvas.style.width = `${W}px`;
+    canvas.style.height = `${H}px`;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); // (re)applique l'échelle dpr après resize
+  }
+  resize();
 
   // Centre du plan = centre du sol (origine monde). X → droite, Z → bas.
-  const cx = W / 2;
-  const cz = H / 2;
   const toPx = (x, z) => [cx + x * SCALE, cz + z * SCALE];
 
   let visible = false;
@@ -124,6 +133,9 @@ export function setupMinimap(camera, ROOM, troffers = []) {
   return {
     update,
     toggle,
+    resize,
+    // Re-cible les néons à dessiner et redimensionne le plan après une régénération.
+    refresh(newTroffers) { if (newTroffers) troffers = newTroffers; resize(); if (visible) draw(); },
     get isVisible() { return visible; },
     dispose() { document.removeEventListener('keydown', onKey); canvas.remove(); },
   };

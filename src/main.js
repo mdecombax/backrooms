@@ -1,10 +1,12 @@
 import * as THREE from 'three';
 import { setupFpsControls } from './fpsControls.js';
 import { setupDebug } from './debug.js';
-import { buildRoom, ROOM } from './room.js';
-import { setupBaseLighting, addFluorescents, updateFluorescents } from './lights.js';
+import { buildRoom, disposeRoom, applyRoomDims, ROOM } from './room.js';
+import { setupBaseLighting, addFluorescents, updateFluorescents, disposeFluorescents } from './lights.js';
 import { loadCeilingLamp } from './assets.js';
 import { setupMinimap } from './minimap.js';
+import { generateRoom } from './procgen.js';
+import { setupRoomHud } from './roomHud.js';
 
 // --- Renderer ---------------------------------------------------------------
 const canvas = document.createElement('canvas');
@@ -34,21 +36,56 @@ camera.position.set(0, 1.6, 2.5); // hauteur d'oeil, à l'intérieur de la pièc
 // Contrôles FPS : clic pour verrouiller le pointeur, ZQSD/WASD pour marcher.
 const { controls, update: updateControls } = setupFpsControls(camera, canvas);
 
+// --- Génération procédurale des dimensions ----------------------------------
+// On tire une pièce différente à chaque chargement (surface + ratio bornés).
+let roomInfo = generateRoom();
+applyRoomDims(roomInfo);
+
 // --- Pièce ------------------------------------------------------------------
-const room = buildRoom(scene);
+// room et troffers sont mutables : la régénération les détruit puis les recrée.
+let room = buildRoom(scene);
 
 // --- Éclairage de base (étape 3) -------------------------------------------
 const baseLights = setupBaseLighting(scene);
 
 // --- Néons fluorescents (étape 4) ------------------------------------------
-const troffers = addFluorescents(scene);
+let troffers = addFluorescents(scene);
 
 // --- Prop Sketchfab (étape 7) ----------------------------------------------
+// Le plafonnier est centré au plafond, hauteur fixe → chargé une seule fois.
 loadCeilingLamp(scene);
 
 // --- Plan 2D (touche M) -----------------------------------------------------
 // Vue de dessus de la salle avec position/orientation du joueur.
 const minimap = setupMinimap(camera, ROOM, troffers);
+
+// --- Régénération (bouton + touche R) ---------------------------------------
+function regenerate() {
+  // 1) Destruction de la pièce et des néons courants (libère la mémoire GPU).
+  disposeRoom(scene, room);
+  disposeFluorescents(scene, troffers);
+
+  // 2) Nouveau tirage de dimensions + application sur la référence ROOM partagée.
+  roomInfo = generateRoom();
+  applyRoomDims(roomInfo);
+
+  // 3) Reconstruction.
+  room = buildRoom(scene);
+  troffers = addFluorescents(scene);
+
+  // 4) Replace le joueur au centre de la nouvelle pièce (jamais coincé dans un mur).
+  camera.position.set(0, 1.6, 0);
+
+  // 5) Rafraîchit le plan 2D (nouvelle taille + nouveaux néons) et le HUD.
+  minimap.refresh(troffers);
+  hud.update(roomInfo);
+}
+
+const hud = setupRoomHud(roomInfo, regenerate);
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyR') { e.preventDefault(); regenerate(); }
+});
 
 // --- Boucle de rendu --------------------------------------------------------
 const clock = new THREE.Clock();
@@ -84,6 +121,10 @@ window.addEventListener('resize', () => {
 
 // --- Debug ------------------------------------------------------------------
 setupDebug({
-  THREE, scene, camera, renderer, controls, room, ROOM,
+  THREE, scene, camera, renderer, controls, ROOM,
+  get room() { return room; },
+  get troffers() { return troffers; },
+  roomInfo: () => roomInfo,
+  regenerate,
   setFpsCap: (n) => { fpsCap = Math.max(1, n | 0); return fpsCap; },
 });

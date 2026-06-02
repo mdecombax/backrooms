@@ -33,17 +33,35 @@ export function setupBaseLighting(scene) {
 const PANEL_W = 1.2; // axe X
 const PANEL_D = 0.6; // axe Z
 
+// Espacement cible entre centres de panneaux (m). La grille s'adapte aux dimensions.
+const TARGET_SPACING = 3.2;
+
 /**
- * Panneaux fluorescents (étape 4) disposés en grille au plafond.
+ * Répartit n panneaux uniformément le long d'un axe de longueur L, centré sur 0.
+ * Chaque panneau est au milieu de sa « cellule » → marges égales aux bords.
+ */
+function spread(n, L) {
+  const out = [];
+  for (let i = 0; i < n; i++) out.push(((i + 0.5) / n) * L - L / 2);
+  return out;
+}
+
+/**
+ * Panneaux fluorescents disposés en grille au plafond, dimensionnée d'après la pièce.
  * Chaque troffer = un plan émissif (la surface qui brille) + une RectAreaLight
  * (lumière douce, plate, venue d'en haut → signature backrooms).
- * Retourne la liste des troffers pour animer le scintillement (étape 6).
+ * Retourne la liste des troffers pour animer le scintillement.
  */
 export function addFluorescents(scene) {
   const y = ROOM.height - 0.02; // juste sous le plafond
-  const xs = [-3, 0, 3];
-  const zs = [-1.75, 1.75];
   const baseIntensity = 4.5;
+
+  // Nombre de panneaux par axe : ~1 tous les TARGET_SPACING m, borné pour que
+  // l'espacement reste ≥ ~1,8 m (les panneaux de 1,2 m ne se chevauchent pas).
+  const cols = Math.max(1, Math.min(Math.round(ROOM.width / TARGET_SPACING), Math.floor(ROOM.width / 1.8)));
+  const rows = Math.max(1, Math.min(Math.round(ROOM.depth / TARGET_SPACING), Math.floor(ROOM.depth / 1.8)));
+  const xs = spread(cols, ROOM.width);
+  const zs = spread(rows, ROOM.depth);
 
   const panelMat = () =>
     new THREE.MeshBasicMaterial({ color: FLUO_COLOR, fog: false });
@@ -94,11 +112,26 @@ export function addFluorescents(scene) {
     }
   }
 
-  // On marque 2 panneaux comme défaillants (scintillement)
-  if (troffers[0]) troffers[0].faulty = true;
-  if (troffers[5]) troffers[5].faulty = true;
+  // ~20 % des panneaux défaillent (scintillement), au moins 1 dès qu'il y en a ≥ 3.
+  const faultyCount = troffers.length >= 3 ? Math.max(1, Math.round(troffers.length * 0.2)) : 0;
+  const pool = troffers.map((_, i) => i);
+  for (let n = 0; n < faultyCount && pool.length; n++) {
+    const idx = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+    troffers[idx].faulty = true;
+  }
 
   return troffers;
+}
+
+/** Détruit une grille de néons : retire les groupes de la scène et libère le GPU. */
+export function disposeFluorescents(scene, troffers) {
+  for (const tr of troffers || []) {
+    scene.remove(tr.group);
+    tr.group.traverse((o) => {
+      o.geometry?.dispose?.();
+      o.material?.dispose?.();
+    });
+  }
 }
 
 /**

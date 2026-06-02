@@ -57,10 +57,6 @@ export function setupFpsControls(camera, canvas, domElement) {
   document.addEventListener('keydown', onKeyDown);
   document.addEventListener('keyup', onKeyUp);
 
-  // Bornes de déplacement (centre du sol = origine).
-  const maxX = ROOM.width / 2 - WALL_MARGIN;
-  const maxZ = ROOM.depth / 2 - WALL_MARGIN;
-
   const dir = new THREE.Vector3();
 
   function update(dt) {
@@ -78,6 +74,9 @@ export function setupFpsControls(camera, canvas, domElement) {
     }
 
     // Collision : on confine la caméra dans la pièce et on fige la hauteur.
+    // Bornes lues à chaque frame → suivent les redimensionnements (régénération).
+    const maxX = ROOM.width / 2 - WALL_MARGIN;
+    const maxZ = ROOM.depth / 2 - WALL_MARGIN;
     const p = camera.position;
     p.x = THREE.MathUtils.clamp(p.x, -maxX, maxX);
     p.z = THREE.MathUtils.clamp(p.z, -maxZ, maxZ);

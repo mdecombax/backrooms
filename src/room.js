@@ -2,11 +2,36 @@ import * as THREE from 'three';
 import { buildMaterials } from './materials.js';
 
 // Dimensions de la pièce (mètres). Origine = centre du sol.
+// Objet MUTABLE partagé : les autres modules importent cette référence et lisent
+// ROOM.width/depth/height au moment de l'appel. On la met à jour via applyRoomDims()
+// lors d'une régénération, sans jamais remplacer l'objet (les imports restent valides).
 export const ROOM = {
   width: 10, // axe X
   depth: 7, // axe Z
   height: 3, // axe Y
 };
+
+/** Met à jour les dimensions de la pièce en place (préserve la référence ROOM). */
+export function applyRoomDims({ width, depth, height }) {
+  if (width != null) ROOM.width = width;
+  if (depth != null) ROOM.depth = depth;
+  if (height != null) ROOM.height = height;
+  return ROOM;
+}
+
+/** Détruit une pièce construite par buildRoom : retire le groupe et libère GPU. */
+export function disposeRoom(scene, room) {
+  if (!room?.group) return;
+  scene.remove(room.group);
+  room.group.traverse((o) => {
+    if (o.geometry) o.geometry.dispose();
+    const mats = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
+    for (const m of mats) {
+      for (const k of ['map', 'normalMap', 'roughnessMap']) m[k]?.dispose?.();
+      m.dispose();
+    }
+  });
+}
 
 /**
  * Construit la coque fermée de la pièce (sol, plafond, 4 murs) + plinthes.
