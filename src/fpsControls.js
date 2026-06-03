@@ -80,6 +80,35 @@ export function setupFpsControls(camera, canvas) {
     return { x, z };
   }
 
+  /** Repousse le point (px, pz) hors des colonnes de LEVEL.pillars (collision cercle/AABB). */
+  function resolvePillars(px, pz) {
+    let x = px, z = pz;
+    for (const pl of LEVEL.pillars) {
+      const hs = pl.size / 2;
+      const minX = pl.cx - hs, maxX = pl.cx + hs;
+      const minZ = pl.cz - hs, maxZ = pl.cz + hs;
+      // Point le plus proche de la AABB par rapport au joueur.
+      const nearX = Math.max(minX, Math.min(maxX, x));
+      const nearZ = Math.max(minZ, Math.min(maxZ, z));
+      const ex = x - nearX, ez = z - nearZ;
+      const dist = Math.hypot(ex, ez);
+      if (dist < PLAYER_R && dist > 1e-9) {
+        const push = (PLAYER_R - dist) / dist;
+        x += ex * push;
+        z += ez * push;
+      } else if (dist < 1e-9) {
+        // Joueur à l'intérieur de la colonne : repousse par le côté le plus proche.
+        const dL = x - minX, dR = maxX - x, dT = z - minZ, dB = maxZ - z;
+        const m = Math.min(dL, dR, dT, dB);
+        if (m === dL) x = minX - PLAYER_R;
+        else if (m === dR) x = maxX + PLAYER_R;
+        else if (m === dT) z = minZ - PLAYER_R;
+        else z = maxZ + PLAYER_R;
+      }
+    }
+    return { x, z };
+  }
+
   function update(dt) {
     if (!controls.isLocked) return;
     const speed = (keys.run ? RUN_SPEED : WALK_SPEED) * dt;
@@ -92,9 +121,10 @@ export function setupFpsControls(camera, canvas) {
     }
 
     const p = camera.position;
-    const resolved = resolveWalls(p.x, p.z);
-    p.x = resolved.x;
-    p.z = resolved.z;
+    const r1 = resolveWalls(p.x, p.z);
+    const r2 = resolvePillars(r1.x, r1.z);
+    p.x = r2.x;
+    p.z = r2.z;
     p.y = EYE_HEIGHT;
   }
 

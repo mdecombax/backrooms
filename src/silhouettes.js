@@ -7,15 +7,13 @@ const MAX_COUNT      = TEST_MODE ? 4  : 2;
 const SPAWN_MIN_DIST = 28;
 const SPAWN_MAX_DIST = 90;
 const DESPAWN_NEAR   = 16;
-const SPEED_CROSS    = 2.8;  // m/s traversée mur→mur
-const SPEED_PEEK     = 2.0;  // m/s entrée + recul
-const PEEK_IN_DIST   = 1.8;  // m d'entrée avant de s'arrêter
-const PEEK_PAUSE     = 0.28; // s de pause (regard vers le joueur)
+const SPEED_PEEK     = 3.2;  // m/s sortie + recul
+const PEEK_IN_DIST   = 0.45; // m d'émergence depuis le mur
+const PEEK_PAUSE     = 0.18; // s de pause (regard vers le joueur)
 const BOB_AMP        = 0.022;
 const STRIDE_AMP     = 0.38;
 
-const CROSS = 'cross'; // traverse mur→mur opposé
-const PEEK  = 'peek';  // entre, pivote, repart par le même mur
+const PEEK  = 'peek';  // sort du mur, pivote vers le joueur, rentre
 
 const GOING     = 'going';
 const PAUSING   = 'pausing';
@@ -84,7 +82,6 @@ function wallPos(cell, wall, offset) {
 
 // Direction inward depuis le mur (vers le centre de la cellule).
 const INWARD = { N: [0, 1], S: [0, -1], W: [1, 0], E: [-1, 0] };
-const OPPOSITE = { N: 'S', S: 'N', W: 'E', E: 'W' };
 
 // --- Système -----------------------------------------------------------------
 export function createSilhouetteSystem(scene, level) {
@@ -104,27 +101,18 @@ export function createSilhouetteSystem(scene, level) {
 
     const cell = candidates[Math.floor(Math.random() * candidates.length)];
 
-    // Choisir un mur d'entrée et un comportement.
+    // Choisir un mur et émerger légèrement vers l'intérieur.
     const walls = ['N', 'S', 'W', 'E'];
     const entryWall = walls[Math.floor(Math.random() * 4)];
-    const behavior  = Math.random() < 0.55 ? CROSS : PEEK;
+    const behavior  = PEEK;
     const offset    = (Math.random() - 0.5); // −0.5..+0.5 le long du mur
 
     const entry = wallPos(cell, entryWall, offset);
     const [ix, iz] = INWARD[entryWall];
     const inwardDir = new THREE.Vector3(ix, 0, iz);
 
-    // Point intérieur selon le comportement :
-    // CROSS → mur opposé ; PEEK → quelques mètres dans la pièce.
-    let target;
-    if (behavior === CROSS) {
-      // Traverser jusqu'au mur opposé (même offset latéral, légèrement variable).
-      const exitOffset = offset + (Math.random() - 0.5) * 0.15;
-      target = wallPos(cell, OPPOSITE[entryWall], exitOffset);
-    } else {
-      // Avancer de PEEK_IN_DIST mètres.
-      target = entry.clone().addScaledVector(inwardDir, PEEK_IN_DIST);
-    }
+    // Avancer de PEEK_IN_DIST mètres depuis le mur.
+    const target = entry.clone().addScaledVector(inwardDir, PEEK_IN_DIST);
 
     const fig = makeFigure();
     fig.root.position.copy(entry);
@@ -138,7 +126,7 @@ export function createSilhouetteSystem(scene, level) {
       inwardDir,
       behavior,
       state:      GOING,
-      speed:      behavior === CROSS ? SPEED_CROSS : SPEED_PEEK,
+      speed:      SPEED_PEEK,
       phase:      Math.random() * Math.PI * 2,
       pauseLeft:  PEEK_PAUSE * (0.8 + Math.random() * 0.4),
       camRef:     camera,
@@ -184,13 +172,11 @@ export function createSilhouetteSystem(scene, level) {
 
         if (dist < 0.08) {
           // Cible atteinte
-          if (s.behavior === CROSS) {
-            despawn = true; // mur opposé → disparaît dans le mur
-          } else if (s.state === GOING) {
+          if (s.state === GOING) {
             s.state     = PAUSING;
             s.pauseLeft = PEEK_PAUSE * (0.8 + Math.random() * 0.4);
           } else {
-            despawn = true; // mur d'entrée atteint → disparaît
+            despawn = true; // retour au mur d'entrée → disparaît
           }
         } else {
           toTarget.normalize();
