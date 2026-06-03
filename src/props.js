@@ -202,3 +202,80 @@ export function disposeCables(scene, group) {
   group.children.forEach((o) => o.geometry?.dispose());
   group.userData.mat?.dispose();
 }
+
+// ---- Objets anomalies (hors-contexte) ----------------------------------------
+
+const ANOMALY_DEFS = [
+  { path: '/assets/rubber_duck.glb', targetH: 0.20, name: 'canard' },
+  { path: '/assets/teddy_bear.glb',  targetH: 0.38, name: 'nounours' },
+  { path: '/assets/gnome.glb',       targetH: 0.58, name: 'gnome' },
+];
+
+const _anomalyPromises = [null, null, null];
+
+function loadAnomalyTemplate(idx) {
+  if (_anomalyPromises[idx]) return _anomalyPromises[idx];
+  _anomalyPromises[idx] = new Promise((resolve, reject) => {
+    const { path, targetH } = ANOMALY_DEFS[idx];
+    loader.load(path, (gltf) => {
+      const model = gltf.scene;
+      const box = new THREE.Box3().setFromObject(model);
+      const sz = new THREE.Vector3();
+      box.getSize(sz);
+      const s = targetH / Math.max(sz.y, 0.01);
+      model.scale.setScalar(s);
+      const box2 = new THREE.Box3().setFromObject(model);
+      model.userData.yOffset = -box2.min.y;
+      // Légère émission pour l'effet "bug"
+      model.traverse((child) => {
+        if (child.isMesh && child.material) {
+          const mats = Array.isArray(child.material) ? child.material : [child.material];
+          mats.forEach((m) => {
+            m.emissive = new THREE.Color(0xfff4aa);
+            m.emissiveIntensity = 0.08;
+          });
+        }
+      });
+      resolve(model);
+    }, undefined, reject);
+  });
+  return _anomalyPromises[idx];
+}
+
+/**
+ * Place un seul objet incongru par niveau (canard, nounours ou nain de jardin).
+ * Le choix et la position sont déterministes via la graine du niveau.
+ */
+export async function spawnAnomalies(scene, level) {
+  const rng = mkRng((level.seed ^ 0xc0ffee42) >>> 0);
+
+  const modelIdx = Math.floor(rng() * ANOMALY_DEFS.length);
+  const template = await loadAnomalyTemplate(modelIdx);
+
+  const validCells = level.cells.filter((c) => !SKIP_TYPES.has(c.typeId));
+  if (validCells.length === 0) return null;
+
+  const cell = validCells[Math.floor(rng() * validCells.length)];
+  const margin = 0.6;
+  const uw = Math.max(0, cell.width - margin * 2);
+  const ud = Math.max(0, cell.depth - margin * 2);
+
+  const group = new THREE.Group();
+  group.name = 'props_anomaly';
+
+  const obj = template.clone(true);
+  obj.position.set(
+    cell.cx + (rng() - 0.5) * uw,
+    template.userData.yOffset ?? 0,
+    cell.cz + (rng() - 0.5) * ud,
+  );
+  obj.rotation.y = rng() * Math.PI * 2;
+  group.add(obj);
+
+  scene.add(group);
+  return group;
+}
+
+export function disposeAnomalies(scene, group) {
+  if (group) scene.remove(group);
+}

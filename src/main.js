@@ -7,7 +7,8 @@ import { setupMinimap } from './minimap.js';
 import { generateLevel } from './procgen.js';
 import { setupRoomHud } from './roomHud.js';
 import { setupAmbiance } from './sound.js';
-import { spawnChairs, disposeProps, spawnCables, disposeCables } from './props.js';
+import { spawnChairs, disposeProps, spawnCables, disposeCables, spawnAnomalies, disposeAnomalies } from './props.js';
+import { createSilhouetteSystem, disposeSilhouetteMat } from './silhouettes.js';
 
 // --- Renderer ---------------------------------------------------------------
 const canvas = document.createElement('canvas');
@@ -52,6 +53,13 @@ spawnChairs(scene, levelInfo).then((g) => { propsGroup = g; });
 // --- Câbles électriques -----------------------------------------------------
 let cablesGroup = spawnCables(scene, levelInfo);
 
+// --- Anomalies (objets incongruents) ----------------------------------------
+let anomalyGroup = null;
+spawnAnomalies(scene, levelInfo).then((g) => { anomalyGroup = g; });
+
+// --- Silhouettes ------------------------------------------------------------
+let silhouettes = createSilhouetteSystem(scene, levelInfo);
+
 
 // --- Plan 2D (touche M) -----------------------------------------------------
 const minimap = setupMinimap(camera, troffers);
@@ -79,7 +87,10 @@ function regenerate() {
   disposeFluorescents(scene, troffers);
   disposeProps(scene, propsGroup);
   disposeCables(scene, cablesGroup);
+  disposeAnomalies(scene, anomalyGroup);
+  silhouettes.dispose();
   propsGroup = null;
+  anomalyGroup = null;
 
   levelInfo = generateLevel();
   applyLevel(levelInfo);
@@ -88,6 +99,8 @@ function regenerate() {
   troffers = addFluorescents(scene);
   spawnChairs(scene, levelInfo).then((g) => { propsGroup = g; });
   cablesGroup = spawnCables(scene, levelInfo);
+  spawnAnomalies(scene, levelInfo).then((g) => { anomalyGroup = g; });
+  silhouettes = createSilhouetteSystem(scene, levelInfo);
 
   placePlayer();
   tuneFog();
@@ -124,6 +137,7 @@ function animate() {
   const t = clock.elapsedTime;
   updateControls(dt);
   updateFluorescents(troffers, t);
+  silhouettes.update(camera, dt);
   minimap.update();
   renderer.render(scene, camera);
 
