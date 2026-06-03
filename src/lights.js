@@ -57,33 +57,34 @@ function haloTexture() {
 
 /**
  * Crée des panneaux fluorescents pour chaque cellule du niveau.
+ * OPTIMISATION : un seul PointLight par cellule (au lieu d'un par troffer visuel).
+ * Les panneaux et halos décoratifs restent nombreux mais ne coûtent rien en éclairage.
  * Retourne la liste complète des troffers (pour animation + minimap).
  */
 export function addFluorescents(scene) {
-  const baseIntensity = 8;
-  const lightDist = Math.max(LEVEL.height * 3.5, 10);
+  const BASE_INTENSITY = 8;
   const frameMat = new THREE.MeshStandardMaterial({ color: 0xdedacb, roughness: 0.7 });
   const panelMat = () => new THREE.MeshBasicMaterial({ color: FLUO_COLOR, fog: false });
   const troffers = [];
 
   for (const c of LEVEL.cells) {
     const cy = (c.height ?? LEVEL.height) - 0.02;
+    const lightDist = Math.max((c.height ?? LEVEL.height) * 3.5, 10);
     const cols = Math.max(1, Math.min(Math.round(c.width / TARGET_SPACING), Math.floor(c.width / 1.8)));
     const rows = Math.max(1, Math.min(Math.round(c.depth / TARGET_SPACING), Math.floor(c.depth / 1.8)));
 
-    // Grille idéale, puis on écrête si trop de lampes dans la cellule.
     const positions = [];
     const xs = spread(cols, c.width, c.cx);
     const zs = spread(rows, c.depth, c.cz);
     for (const x of xs) for (const z of zs) positions.push([x, z]);
 
-    // Sous-échantillonner si on dépasse le cap.
-    const step = positions.length > MAX_PER_CELL
-      ? Math.ceil(positions.length / MAX_PER_CELL)
-      : 1;
+    const step = positions.length > MAX_PER_CELL ? Math.ceil(positions.length / MAX_PER_CELL) : 1;
     const kept = positions.filter((_, i) => i % step === 0);
 
-    for (const [x, z] of kept) {
+    // Intensité compensée pour simuler la contribution de tous les panneaux.
+    const cellIntensity = BASE_INTENSITY * Math.max(1, kept.length * 0.55);
+
+    for (const [i, [x, z]] of kept.entries()) {
       const group = new THREE.Group();
       group.name = 'troffer';
 
@@ -98,12 +99,6 @@ export function addFluorescents(scene) {
       panel.name = 'panel';
       group.add(panel);
 
-      const light = new THREE.PointLight(FLUO_COLOR, baseIntensity, lightDist, 2);
-      light.position.set(x, cy - 0.15, z);
-      light.name = 'fluo';
-      group.add(light);
-
-      // Halo doux sur le plafond (simulé sans RectAreaLight)
       const haloMat = new THREE.MeshBasicMaterial({
         map: haloTexture(),
         transparent: true,
@@ -117,8 +112,17 @@ export function addFluorescents(scene) {
       halo.name = 'halo';
       group.add(halo);
 
+      // Premier troffer de la cellule → porte le seul PointLight de la cellule.
+      let light = null;
+      if (i === 0) {
+        light = new THREE.PointLight(FLUO_COLOR, cellIntensity, lightDist, 2);
+        light.position.set(c.cx, cy - 0.15, c.cz);
+        light.name = 'fluo';
+        group.add(light);
+      }
+
       scene.add(group);
-      troffers.push({ group, panel, halo, light, baseIntensity, baseColor: new THREE.Color(FLUO_COLOR), faulty: false, seed: troffers.length * 13.7 });
+      troffers.push({ group, panel, halo, light, baseIntensity: cellIntensity, baseColor: new THREE.Color(FLUO_COLOR), faulty: false, seed: troffers.length * 13.7 });
     }
   }
 
@@ -148,7 +152,7 @@ export function updateFluorescents(troffers, t) {
     } else {
       factor = 0.985 + 0.015 * Math.sin(t * 40 + tr.seed);
     }
-    tr.light.intensity = tr.baseIntensity * factor;
+    if (tr.light) tr.light.intensity = tr.baseIntensity * factor;
     tr.panel.material.color.copy(tr.baseColor).multiplyScalar(0.25 + 0.75 * factor);
     tr.halo.material.opacity = 0.2 + 0.8 * factor;
   }

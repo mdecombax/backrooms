@@ -41,7 +41,7 @@ function mulberry32(a) {
 //   round  : 'half' (0,5 m) ou 'one' (1 m) — granularité des dimensions finales
 const ARCHETYPES = [
   { id: 'closet', label: 'Cagibi', weight: 1.2, short: [2, 3], ratio: [1, 1.4], height: [2.3, 2.7], round: 'half', desc: 'Réduit exigu, plafond bas, sans issue apparente.' },
-  { id: 'corridor', label: 'Couloir', weight: 2.0, short: [1.8, 3], ratio: [4.5, 9], height: [2.5, 3.1], round: 'one', desc: 'Long couloir étroit qui semble ne jamais finir.' },
+  { id: 'corridor', label: 'Couloir', weight: 0.6, short: [1.8, 3], ratio: [4.5, 9], height: [2.5, 3.1], round: 'one', desc: 'Long couloir étroit qui semble ne jamais finir.' },
   { id: 'gallery', label: 'Galerie', weight: 1.4, short: [5, 8], ratio: [2.2, 3.4], height: [3.2, 4], round: 'one', desc: 'Espace allongé et large, comme une galerie marchande.' },
   { id: 'small', label: 'Petite salle', weight: 1.8, short: [4, 6], ratio: [1, 1.4], height: [2.7, 3], round: 'half', desc: 'Pièce modeste, presque carrée.' },
   { id: 'medium', label: 'Salle moyenne', weight: 2.2, short: [6, 9], ratio: [1.1, 1.8], height: [2.9, 3.4], round: 'half', desc: 'Salle de bureau ordinaire, ni grande ni petite.' },
@@ -306,6 +306,105 @@ function generatePillars(room, rng) {
 }
 
 /**
+ * Retourne vrai si l'ouverture `o` touche le rectangle [xlo,xhi]×[zlo,zhi].
+ * Utilisé pour détecter les ouvertures dans la zone du cran avant de valider un split en L.
+ */
+function openingInRect(o, xlo, xhi, zlo, zhi, eps = 0.05) {
+  if (o.axis === 'x') {
+    return o.line > xlo - eps && o.line < xhi + eps &&
+           Math.min(o.a, o.b) < zhi - eps && Math.max(o.a, o.b) > zlo + eps;
+  } else {
+    return o.line > zlo - eps && o.line < zhi + eps &&
+           Math.min(o.a, o.b) < xhi - eps && Math.max(o.a, o.b) > xlo + eps;
+  }
+}
+
+/**
+ * Tente de décomposer une pièce rectangulaire en deux sous-rectangles formant un L.
+ * Renvoie { partA, partB, opening } ou null si les conditions ne sont pas réunies.
+ *
+ * Principe : on trace une ligne de coupe (z=cst ou x=cst) qui divise la pièce en
+ * deux bandes. L'une est pleine largeur, l'autre est rétrécie d'un côté (le cran du L).
+ * L'arête partagée entre les deux parties est enregistrée comme ouverture → buildWalls
+ * ne bâtit pas de mur intérieur à cet endroit, laissant l'espace ouvert.
+ *
+ * Le paramètre `openings` permet de rejeter les découpes dont le cran couvrirait une
+ * ouverture existante (porte ou couloir), ce qui laisserait un trou dans les murs.
+ */
+function maybySplitL(room, rng, openings) {
+  const eligible = new Set(['small', 'medium', 'hall', 'gallery', 'vast']);
+  if (!eligible.has(room.typeId)) return null;
+  if (room.width < 5 || room.depth < 5) return null;
+
+  const probs = { small: 0.50, medium: 0.65, gallery: 0.70, hall: 0.70, vast: 0.75 };
+  if (rng() > (probs[room.typeId] ?? 0)) return null;
+
+  const r = rectOf(room);
+  const splitOnZ = rng() < 0.5; // true = ligne de coupe horizontale (z = cst)
+
+  if (splitOnZ) {
+    // Bande PLEINE en bas ou en haut de splitZ, bande ÉTROITE de l'autre côté.
+    const fullOnBottom = rng() < 0.5;
+    const splitZ = HALF(r.minZ + (r.maxZ - r.minZ) * (0.35 + rng() * 0.30));
+    const notchW = HALF(room.width * (0.30 + rng() * 0.25));
+    const notchLeft = rng() < 0.5;
+    const narrowW = room.width - notchW;
+    const narrowD = fullOnBottom ? splitZ - r.minZ : r.maxZ - splitZ;
+    const fullD   = fullOnBottom ? r.maxZ - splitZ : splitZ - r.minZ;
+
+    if (narrowW < 2 || notchW < 1.5 || narrowD < 1.5 || fullD < 1.5) return null;
+
+    const fullCZ   = fullOnBottom ? (splitZ + r.maxZ) / 2 : (r.minZ + splitZ) / 2;
+    const narrowCZ = fullOnBottom ? (r.minZ + splitZ) / 2 : (splitZ + r.maxZ) / 2;
+    const narrowCX = notchLeft ? (r.minX + notchW + r.maxX) / 2 : (r.minX + r.maxX - notchW) / 2;
+    const openA = notchLeft ? r.minX + notchW : r.minX;
+    const openB = notchLeft ? r.maxX : r.maxX - notchW;
+
+    const partA = { ...room, id: room.id + '_a', groupId: room.id, cx: room.cx,  cz: fullCZ,   width: room.width, depth: fullD };
+    const partB = { ...room, id: room.id + '_b', groupId: room.id, cx: narrowCX, cz: narrowCZ, width: narrowW,    depth: narrowD };
+
+    // Le cran est dans la bande Z de partB, du côté X retiré.
+    const notchZlo = fullOnBottom ? r.minZ : splitZ;
+    const notchZhi = fullOnBottom ? splitZ : r.maxZ;
+    const notchXlo = notchLeft ? r.minX : r.maxX - notchW;
+    const notchXhi = notchLeft ? r.minX + notchW : r.maxX;
+    if (openings.some((o) => openingInRect(o, notchXlo, notchXhi, notchZlo, notchZhi))) return null;
+
+    return { partA, partB, opening: { axis: 'z', line: splitZ, a: openA, b: openB, h1: room.height, h2: room.height } };
+
+  } else {
+    // Bande PLEINE à gauche ou à droite de splitX, bande ÉTROITE de l'autre côté.
+    const fullOnRight = rng() < 0.5;
+    const splitX = HALF(r.minX + (r.maxX - r.minX) * (0.35 + rng() * 0.30));
+    const notchD = HALF(room.depth * (0.30 + rng() * 0.25));
+    const notchTop = rng() < 0.5;
+    const narrowD = room.depth - notchD;
+    const narrowW = fullOnRight ? splitX - r.minX : r.maxX - splitX;
+    const fullW   = fullOnRight ? r.maxX - splitX : splitX - r.minX;
+
+    if (narrowD < 2 || notchD < 1.5 || narrowW < 1.5 || fullW < 1.5) return null;
+
+    const fullCX   = fullOnRight ? (splitX + r.maxX) / 2 : (r.minX + splitX) / 2;
+    const narrowCX = fullOnRight ? (r.minX + splitX) / 2 : (splitX + r.maxX) / 2;
+    const narrowCZ = notchTop ? (r.minZ + notchD + r.maxZ) / 2 : (r.minZ + r.maxZ - notchD) / 2;
+    const openA = notchTop ? r.minZ + notchD : r.minZ;
+    const openB = notchTop ? r.maxZ : r.maxZ - notchD;
+
+    const partA = { ...room, id: room.id + '_a', groupId: room.id, cx: fullCX,   cz: room.cz,  width: fullW,   depth: room.depth };
+    const partB = { ...room, id: room.id + '_b', groupId: room.id, cx: narrowCX, cz: narrowCZ, width: narrowW, depth: narrowD };
+
+    // Le cran est dans la bande X de partB, du côté Z retiré.
+    const notchXlo = fullOnRight ? r.minX : splitX;
+    const notchXhi = fullOnRight ? splitX : r.maxX;
+    const notchZlo = notchTop ? r.minZ : r.maxZ - notchD;
+    const notchZhi = notchTop ? r.minZ + notchD : r.maxZ;
+    if (openings.some((o) => openingInRect(o, notchXlo, notchXhi, notchZlo, notchZhi))) return null;
+
+    return { partA, partB, opening: { axis: 'x', line: splitX, a: openA, b: openB, h1: room.height, h2: room.height } };
+  }
+}
+
+/**
  * Génère un niveau complet : 2 à 3 pièces connectées (modes porte + couloir mêlés).
  * En mode « couloir », la pièce de liaison est tirée depuis l'archétype Couloir et
  * apparaît dans la liste rooms comme n'importe quelle autre pièce.
@@ -315,7 +414,7 @@ export function generateLevel(seed) {
   const usedSeed = seed == null ? (Math.random() * 0xffffffff) >>> 0 : seed >>> 0;
   const rng = mulberry32(usedSeed);
 
-  const targetRooms = rng() < 0.5 ? 2 : 3;
+  const targetRooms = 15;
 
   // Pièce de départ centrée à l'origine (le joueur y apparaît).
   const f0 = drawFootprint(rng);
@@ -327,12 +426,12 @@ export function generateLevel(seed) {
 
   let placed = 1;
   let guard = 0;
-  while (placed < targetRooms && guard++ < 60) {
+  while (placed < targetRooms && guard++ < 300) {
     // On choisit la base parmi les pièces non-couloir pour éviter d'enchaîner
     // les couloirs les uns aux autres.
     const nonCorridors = rooms.filter((r) => r.typeId !== 'corridor');
     const base = (nonCorridors.length ? nonCorridors : rooms)[Math.floor(rng() * (nonCorridors.length || rooms.length))];
-    const mode = rng() < 0.5 ? 'door' : 'corridor';
+    const mode = rng() < 0.15 ? 'corridor' : 'door';
     const side = SIDES[Math.floor(rng() * SIDES.length)];
     const f = drawFootprint(rng);
     const res = tryAttach(base, side, mode, f, cells, placed, rng);
@@ -347,13 +446,31 @@ export function generateLevel(seed) {
     placed++;
   }
 
+  // Découpe en L : certaines pièces sont remplacées par deux sous-rectangles.
+  // On modifie `cells` en place ; `rooms` (HUD) conserve les entrées originales.
+  {
+    const split = [];
+    for (const c of cells) {
+      const res = maybySplitL(c, rng, openings);
+      if (res) {
+        split.push(res.partA, res.partB);
+        openings.push(res.opening);
+      } else {
+        split.push(c);
+      }
+    }
+    cells.length = 0;
+    cells.push(...split);
+  }
+
   const walls = buildWalls(cells, openings);
   const corridorCount = rooms.filter((r) => r.typeId === 'corridor').length;
   const roomCount = rooms.filter((r) => r.typeId !== 'corridor').length;
 
-  // Poutres/colonnes — générées après placement pour ne pas perturber le RNG du layout.
+  // Poutres/colonnes — depuis cells (après découpe) pour ne pas placer de colonnes
+  // dans le cran vide d'une pièce en L.
   const pillars = [];
-  for (const room of rooms) pillars.push(...generatePillars(room, rng));
+  for (const cell of cells) pillars.push(...generatePillars(cell, rng));
 
   // Linteaux aux ouvertures entre pièces de hauteurs différentes.
   const lintels = openings

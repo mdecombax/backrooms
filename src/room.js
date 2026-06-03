@@ -50,30 +50,31 @@ export function ceilingHeight() {
 }
 
 /**
- * Construit un quad (4 sommets, 2 triangles). Les UV vont de 0 à (uRep, vRep) →
- * le tiling de la texture suit la taille réelle de la surface, avec un seul
- * matériau partagé (wrap RepeatWrapping, repeat 1×1).
- * @param {?THREE.Vector3} interior si fourni, on oriente la normale vers ce point
- *        (sol/plafond, FrontSide). Si null, winding fixe (murs DoubleSide).
+ * Accumule un quad dans un batch { pos, uv, idx }.
+ * flipWinding=true → normale +Y (sols FrontSide).
+ * Pour les matériaux DoubleSide (murs, plafonds) le winding est indifférent.
  */
-function quad(p0, p1, p2, p3, material, uRep, vRep, interior) {
-  const pts = [p0, p1, p2, p3];
-  let index = [0, 1, 2, 0, 2, 3];
-  if (interior) {
-    const e1 = new THREE.Vector3().subVectors(p1, p0);
-    const e2 = new THREE.Vector3().subVectors(p2, p0);
-    const n = new THREE.Vector3().crossVectors(e1, e2);
-    const toIn = new THREE.Vector3().subVectors(interior, p0);
-    if (n.dot(toIn) < 0) index = [0, 2, 1, 0, 3, 2];
+function pushQuad(batch, p0, p1, p2, p3, uRep, vRep, flipWinding) {
+  const base = batch.pos.length / 3;
+  batch.pos.push(
+    p0.x, p0.y, p0.z,
+    p1.x, p1.y, p1.z,
+    p2.x, p2.y, p2.z,
+    p3.x, p3.y, p3.z,
+  );
+  batch.uv.push(0, 0, uRep, 0, uRep, vRep, 0, vRep);
+  if (flipWinding) {
+    batch.idx.push(base, base+2, base+1, base, base+3, base+2);
+  } else {
+    batch.idx.push(base, base+1, base+2, base, base+2, base+3);
   }
-  const positions = new Float32Array(12);
-  pts.forEach((p, i) => { positions[i * 3] = p.x; positions[i * 3 + 1] = p.y; positions[i * 3 + 2] = p.z; });
-  const uv = new Float32Array([0, 0, uRep, 0, uRep, vRep, 0, vRep]);
+}
 
+function batchToMesh(batch, material) {
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-  geo.setIndex(index);
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(batch.pos), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(batch.uv), 2));
+  geo.setIndex(batch.idx);
   geo.computeVertexNormals();
   return new THREE.Mesh(geo, material);
 }
@@ -85,101 +86,108 @@ const WALL_TILE = 2.5;
 const WALL_T = 0.60;  // épaisseur des murs (m)
 
 /**
- * Construit toute la géométrie du niveau : pour chaque cellule un sol + un
- * plafond ; pour chaque segment de mur plein un quad vertical (DoubleSide, car
- * un mur intérieur partagé est vu des deux pièces).
- * Retourne { group, materials } — materials est libéré par disposeLevel.
+ * Construit toute la géométrie du niveau en 3 meshes fusionnés (floor / ceiling / wall),
+ * soit 3 draw calls au lieu de plusieurs centaines. Chaque type de surface accumule
+ * toute sa géométrie dans un seul BufferGeometry partagé.
  */
 export function buildLevel(scene) {
   const group = new THREE.Group();
   group.name = 'level';
-
   const mats = buildSurfaceMaterials();
 
+  const bFloor   = { pos: [], uv: [], idx: [] };
+  const bCeil    = { pos: [], uv: [], idx: [] };
+  const bWall    = { pos: [], uv: [], idx: [] };
+  const v = (x, y, z) => new THREE.Vector3(x, y, z);
+
+  // Sols et plafonds
   for (const c of LEVEL.cells) {
     const h = c.height ?? LEVEL.height;
     const xL = c.cx - c.width / 2, xR = c.cx + c.width / 2;
     const zT = c.cz - c.depth / 2, zB = c.cz + c.depth / 2;
-    const interior = new THREE.Vector3(c.cx, h / 2, c.cz);
-
-    // Sol (y = 0)
-    group.add(quad(
-      new THREE.Vector3(xL, 0, zT), new THREE.Vector3(xR, 0, zT),
-      new THREE.Vector3(xR, 0, zB), new THREE.Vector3(xL, 0, zB),
-      mats.floor, c.width / CARPET_TILE, c.depth / CARPET_TILE, interior,
-    ));
-    // Plafond (y = h)
-    group.add(quad(
-      new THREE.Vector3(xL, h, zT), new THREE.Vector3(xR, h, zT),
-      new THREE.Vector3(xR, h, zB), new THREE.Vector3(xL, h, zB),
-      mats.ceiling, c.width / CEIL_TILE, c.depth / CEIL_TILE, interior,
-    ));
+    // Sol : normale +Y requiert winding inversé (FrontSide).
+    pushQuad(bFloor, v(xL,0,zT), v(xR,0,zT), v(xR,0,zB), v(xL,0,zB), c.width/CARPET_TILE, c.depth/CARPET_TILE, true);
+    pushQuad(bCeil,  v(xL,h,zT), v(xR,h,zT), v(xR,h,zB), v(xL,h,zB), c.width/CEIL_TILE,   c.depth/CEIL_TILE,   false);
   }
 
+  // Pré-calcul pour les coins : endpoints des murs par axe.
+  // Permet de distinguer les extrémités «coin» (mur perpendiculaire contigu)
+  // des extrémités «ouverture» (bord de porte/couloir).
+  const ek = (x, z) => `${Math.round(x * 100)},${Math.round(z * 100)}`;
+  const vEndpts = new Set(); // endpoints des murs verticaux (x = cst)
+  const hEndpts = new Set(); // endpoints des murs horizontaux (z = cst)
+  for (const w of LEVEL.walls) {
+    if (Math.abs(w.x2 - w.x1) < 0.01) {
+      vEndpts.add(ek(w.x1, w.z1)); vEndpts.add(ek(w.x1, w.z2));
+    } else {
+      hEndpts.add(ek(w.x1, w.z1)); hEndpts.add(ek(w.x2, w.z1));
+    }
+  }
+
+  // Murs (DoubleSide → winding indifférent).
+  // Aux coins, le mur est prolongé de WALL_T/2 pour remplir le volume d'angle ;
+  // l'embout est supprimé côté coin et conservé uniquement côté ouverture.
   for (const w of LEVEL.walls) {
     const h = LEVEL.height;
-    const dx = w.x2 - w.x1, dz = w.z2 - w.z1;
-    const len = Math.hypot(dx, dz);
-    if (len < 0.01) continue;
-    // Normale perpendiculaire au mur (dans le plan XZ).
-    const nx = -dz / len, nz = dx / len;
+    const isVert = Math.abs(w.x2 - w.x1) < 0.01;
+    let wx1 = w.x1, wz1 = w.z1, wx2 = w.x2, wz2 = w.z2;
+    let capStart = true, capEnd = true;
+    if (!isVert) {
+      if (vEndpts.has(ek(w.x1, w.z1))) { wx1 -= WALL_T / 2; capStart = false; }
+      if (vEndpts.has(ek(w.x2, w.z1))) { wx2 += WALL_T / 2; capEnd   = false; }
+    } else {
+      if (hEndpts.has(ek(w.x1, w.z1))) { wz1 -= WALL_T / 2; capStart = false; }
+      if (hEndpts.has(ek(w.x1, w.z2))) { wz2 += WALL_T / 2; capEnd   = false; }
+    }
+    const wdx = wx2 - wx1, wdz = wz2 - wz1;
+    const wlen = Math.hypot(wdx, wdz);
+    if (wlen < 0.01) continue;
+    const nx = -wdz / wlen, nz = wdx / wlen;
     const hT = WALL_T / 2;
-    const p = (x, y, z) => new THREE.Vector3(x, y, z);
-    // Coins décalés de ±T/2 le long de la normale.
-    const x1m = w.x1 - nx * hT, z1m = w.z1 - nz * hT;
-    const x1p = w.x1 + nx * hT, z1p = w.z1 + nz * hT;
-    const x2m = w.x2 - nx * hT, z2m = w.z2 - nz * hT;
-    const x2p = w.x2 + nx * hT, z2p = w.z2 + nz * hT;
-    // Face A et face B (les deux grandes faces du mur).
-    group.add(quad(p(x1m,0,z1m), p(x2m,0,z2m), p(x2m,h,z2m), p(x1m,h,z1m), mats.wall, len/WALL_TILE, h/WALL_TILE, null));
-    group.add(quad(p(x1p,0,z1p), p(x2p,0,z2p), p(x2p,h,z2p), p(x1p,h,z1p), mats.wall, len/WALL_TILE, h/WALL_TILE, null));
-    // Bouchons aux extrémités.
-    group.add(quad(p(x1m,0,z1m), p(x1p,0,z1p), p(x1p,h,z1p), p(x1m,h,z1m), mats.wall, WALL_T/WALL_TILE, h/WALL_TILE, null));
-    group.add(quad(p(x2m,0,z2m), p(x2p,0,z2p), p(x2p,h,z2p), p(x2m,h,z2m), mats.wall, WALL_T/WALL_TILE, h/WALL_TILE, null));
+    const x1m = wx1 - nx*hT, z1m = wz1 - nz*hT;
+    const x1p = wx1 + nx*hT, z1p = wz1 + nz*hT;
+    const x2m = wx2 - nx*hT, z2m = wz2 - nz*hT;
+    const x2p = wx2 + nx*hT, z2p = wz2 + nz*hT;
+    pushQuad(bWall, v(x1m,0,z1m), v(x2m,0,z2m), v(x2m,h,z2m), v(x1m,h,z1m), wlen/WALL_TILE, h/WALL_TILE, false);
+    pushQuad(bWall, v(x1p,0,z1p), v(x2p,0,z2p), v(x2p,h,z2p), v(x1p,h,z1p), wlen/WALL_TILE, h/WALL_TILE, false);
+    if (capStart) pushQuad(bWall, v(x1m,0,z1m), v(x1p,0,z1p), v(x1p,h,z1p), v(x1m,h,z1m), WALL_T/WALL_TILE, h/WALL_TILE, false);
+    if (capEnd)   pushQuad(bWall, v(x2m,0,z2m), v(x2p,0,z2p), v(x2p,h,z2p), v(x2m,h,z2m), WALL_T/WALL_TILE, h/WALL_TILE, false);
   }
 
-  // Colonnes portantes (section carrée, sol → plafond du niveau).
+  // Colonnes portantes
   for (const pl of LEVEL.pillars) {
     const h = LEVEL.height;
     const hs = pl.size / 2;
-    const p = (x, y, z) => new THREE.Vector3(x, y, z);
     const uv = pl.size / WALL_TILE;
-    // Face N (z minimal)
-    group.add(quad(p(pl.cx-hs,0,pl.cz-hs), p(pl.cx+hs,0,pl.cz-hs), p(pl.cx+hs,h,pl.cz-hs), p(pl.cx-hs,h,pl.cz-hs), mats.wall, uv, h/WALL_TILE, null));
-    // Face S (z maximal)
-    group.add(quad(p(pl.cx-hs,0,pl.cz+hs), p(pl.cx+hs,0,pl.cz+hs), p(pl.cx+hs,h,pl.cz+hs), p(pl.cx-hs,h,pl.cz+hs), mats.wall, uv, h/WALL_TILE, null));
-    // Face W (x minimal)
-    group.add(quad(p(pl.cx-hs,0,pl.cz-hs), p(pl.cx-hs,0,pl.cz+hs), p(pl.cx-hs,h,pl.cz+hs), p(pl.cx-hs,h,pl.cz-hs), mats.wall, uv, h/WALL_TILE, null));
-    // Face E (x maximal)
-    group.add(quad(p(pl.cx+hs,0,pl.cz-hs), p(pl.cx+hs,0,pl.cz+hs), p(pl.cx+hs,h,pl.cz+hs), p(pl.cx+hs,h,pl.cz-hs), mats.wall, uv, h/WALL_TILE, null));
+    pushQuad(bWall, v(pl.cx-hs,0,pl.cz-hs), v(pl.cx+hs,0,pl.cz-hs), v(pl.cx+hs,h,pl.cz-hs), v(pl.cx-hs,h,pl.cz-hs), uv, h/WALL_TILE, false);
+    pushQuad(bWall, v(pl.cx-hs,0,pl.cz+hs), v(pl.cx+hs,0,pl.cz+hs), v(pl.cx+hs,h,pl.cz+hs), v(pl.cx-hs,h,pl.cz+hs), uv, h/WALL_TILE, false);
+    pushQuad(bWall, v(pl.cx-hs,0,pl.cz-hs), v(pl.cx-hs,0,pl.cz+hs), v(pl.cx-hs,h,pl.cz+hs), v(pl.cx-hs,h,pl.cz-hs), uv, h/WALL_TILE, false);
+    pushQuad(bWall, v(pl.cx+hs,0,pl.cz-hs), v(pl.cx+hs,0,pl.cz+hs), v(pl.cx+hs,h,pl.cz+hs), v(pl.cx+hs,h,pl.cz-hs), uv, h/WALL_TILE, false);
   }
 
-  // Linteaux — bandes de mur verticales dans les ouvertures entre pièces de hauteurs différentes.
-  // Chaque linteau couvre y=[hLow, hHigh] à l'emplacement de l'ouverture, fermant le vide
-  // visible depuis la pièce plus haute.
+  // Linteaux
   for (const l of LEVEL.lintels) {
-    const hLow = l.height;
-    const hHigh = LEVEL.height;
+    const hLow = l.height, hHigh = LEVEL.height;
     if (hHigh - hLow < 0.05) continue;
     const hT = WALL_T / 2;
-    const p = (x, y, z) => new THREE.Vector3(x, y, z);
     const bandH = hHigh - hLow;
-
     if (l.axis === 'x') {
       const span = l.b - l.a;
-      // Deux grandes faces verticales
-      group.add(quad(p(l.line-hT,hLow,l.a), p(l.line-hT,hLow,l.b), p(l.line-hT,hHigh,l.b), p(l.line-hT,hHigh,l.a), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
-      group.add(quad(p(l.line+hT,hLow,l.a), p(l.line+hT,hLow,l.b), p(l.line+hT,hHigh,l.b), p(l.line+hT,hHigh,l.a), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
-      // Face inférieure (ferme le bord visible depuis le bas)
-      group.add(quad(p(l.line-hT,hLow,l.a), p(l.line+hT,hLow,l.a), p(l.line+hT,hLow,l.b), p(l.line-hT,hLow,l.b), mats.ceiling, WALL_T/CEIL_TILE, span/CEIL_TILE, null));
+      pushQuad(bWall, v(l.line-hT,hLow,l.a), v(l.line-hT,hLow,l.b), v(l.line-hT,hHigh,l.b), v(l.line-hT,hHigh,l.a), span/WALL_TILE, bandH/WALL_TILE, false);
+      pushQuad(bWall, v(l.line+hT,hLow,l.a), v(l.line+hT,hLow,l.b), v(l.line+hT,hHigh,l.b), v(l.line+hT,hHigh,l.a), span/WALL_TILE, bandH/WALL_TILE, false);
+      pushQuad(bCeil,  v(l.line-hT,hLow,l.a), v(l.line+hT,hLow,l.a), v(l.line+hT,hLow,l.b), v(l.line-hT,hLow,l.b), WALL_T/CEIL_TILE, span/CEIL_TILE, false);
     } else {
       const span = l.b - l.a;
-      // Deux grandes faces verticales
-      group.add(quad(p(l.a,hLow,l.line-hT), p(l.b,hLow,l.line-hT), p(l.b,hHigh,l.line-hT), p(l.a,hHigh,l.line-hT), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
-      group.add(quad(p(l.a,hLow,l.line+hT), p(l.b,hLow,l.line+hT), p(l.b,hHigh,l.line+hT), p(l.a,hHigh,l.line+hT), mats.wall, span/WALL_TILE, bandH/WALL_TILE, null));
-      // Face inférieure
-      group.add(quad(p(l.a,hLow,l.line-hT), p(l.b,hLow,l.line-hT), p(l.b,hLow,l.line+hT), p(l.a,hLow,l.line+hT), mats.ceiling, span/CEIL_TILE, WALL_T/CEIL_TILE, null));
+      pushQuad(bWall, v(l.a,hLow,l.line-hT), v(l.b,hLow,l.line-hT), v(l.b,hHigh,l.line-hT), v(l.a,hHigh,l.line-hT), span/WALL_TILE, bandH/WALL_TILE, false);
+      pushQuad(bWall, v(l.a,hLow,l.line+hT), v(l.b,hLow,l.line+hT), v(l.b,hHigh,l.line+hT), v(l.a,hHigh,l.line+hT), span/WALL_TILE, bandH/WALL_TILE, false);
+      pushQuad(bCeil,  v(l.a,hLow,l.line-hT), v(l.b,hLow,l.line-hT), v(l.b,hLow,l.line+hT), v(l.a,hLow,l.line+hT), span/CEIL_TILE, WALL_T/CEIL_TILE, false);
     }
+  }
+
+  // Construire 3 meshes fusionnés (1 par matériau = 3 draw calls au total).
+  for (const [batch, mat] of [[bFloor, mats.floor], [bCeil, mats.ceiling], [bWall, mats.wall]]) {
+    if (!batch.idx.length) continue;
+    group.add(batchToMesh(batch, mat));
   }
 
   scene.add(group);

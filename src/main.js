@@ -7,6 +7,7 @@ import { setupMinimap } from './minimap.js';
 import { generateLevel } from './procgen.js';
 import { setupRoomHud } from './roomHud.js';
 import { setupAmbiance } from './sound.js';
+import { spawnChairs, disposeProps, spawnCables, disposeCables } from './props.js';
 
 // --- Renderer ---------------------------------------------------------------
 const canvas = document.createElement('canvas');
@@ -23,7 +24,7 @@ renderer.toneMappingExposure = 1.18;
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x161208);
 
-const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 100);
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 400);
 
 const { controls, update: updateControls } = setupFpsControls(camera, canvas);
 
@@ -44,6 +45,13 @@ const baseLights = setupBaseLighting(scene);
 // --- Néons fluorescents -----------------------------------------------------
 let troffers = addFluorescents(scene);
 
+// --- Props (chaises de bureau) ----------------------------------------------
+let propsGroup = null;
+spawnChairs(scene, levelInfo).then((g) => { propsGroup = g; });
+
+// --- Câbles électriques -----------------------------------------------------
+let cablesGroup = spawnCables(scene, levelInfo);
+
 
 // --- Plan 2D (touche M) -----------------------------------------------------
 const minimap = setupMinimap(camera, troffers);
@@ -53,8 +61,8 @@ function tuneFog() {
   if (!scene.fog) return;
   const b = LEVEL.bounds;
   const reach = Math.hypot(b.maxX - b.minX, b.maxZ - b.minZ);
-  scene.fog.near = Math.max(3, reach * 0.1);
-  scene.fog.far = Math.max(18, reach * 1.2);
+  scene.fog.near = Math.max(4, reach * 0.08);
+  scene.fog.far  = Math.min(camera.far * 0.9, Math.max(20, reach * 0.9));
 }
 
 // --- Spawn du joueur --------------------------------------------------------
@@ -69,12 +77,17 @@ minimap.refresh(troffers, `${levelInfo.roomCount} pièce${levelInfo.roomCount > 
 function regenerate() {
   disposeLevel(scene, built);
   disposeFluorescents(scene, troffers);
+  disposeProps(scene, propsGroup);
+  disposeCables(scene, cablesGroup);
+  propsGroup = null;
 
   levelInfo = generateLevel();
   applyLevel(levelInfo);
 
   built = buildLevel(scene);
   troffers = addFluorescents(scene);
+  spawnChairs(scene, levelInfo).then((g) => { propsGroup = g; });
+  cablesGroup = spawnCables(scene, levelInfo);
 
   placePlayer();
   tuneFog();
